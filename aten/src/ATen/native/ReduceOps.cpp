@@ -22,6 +22,8 @@
 #include <cfloat>
 #include <type_traits>
 
+#include <iostream>
+
 namespace at {
 namespace native {
 
@@ -571,6 +573,8 @@ Tensor &mean_out_cpu_gpu(Tensor &result, const Tensor &self, IntArrayRef dim,
   // (mean_kernel_impl()) is unvectorized and leads to very poor performance
   // for production workloads. Once that's fixed, the following code can be used
   // in lieu of the sum + divide implementation below.
+
+  std::cout<<"mean"<<std::endl;
   if (self.device().is_cpu()) {
     int64_t dim_prod = 1;
     if (dim.size() == 0 || self.ndimension() == 0) {
@@ -679,11 +683,20 @@ static Tensor& norm_out(Tensor &result, const Tensor &self, optional<Scalar> opt
 
   auto iter = make_reduction("norm", result, self, dim, keepdim, in_dtype, out_dtype);
 
+  // std::cout<<"norm_out"<<std::endl;
+
+  auto t1 = std::chrono::high_resolution_clock::now();
+
   if (iter.numel() == 0) {
     result.zero_();
   } else {
     norm_stub(iter.device_type(), iter, p);
   }
+
+  auto t2 = std::chrono::high_resolution_clock::now();
+
+  std::cout<<"norm_out timings (micros):"<< std::chrono::duration_cast<std::chrono::microseconds>(t2-t1).count() << std::endl;
+
   return result;
 }
 

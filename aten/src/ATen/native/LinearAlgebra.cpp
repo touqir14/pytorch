@@ -21,8 +21,13 @@
 
 #include <c10/util/variant.h>
 
+#include <iostream>
+#include <chrono>
+
 namespace at {
 namespace native {
+
+
 
 DEFINE_DISPATCH(addr_stub);
 
@@ -1775,6 +1780,9 @@ static Tensor& _linalg_norm_matrix_out(Tensor& result, const Tensor &self, optio
 static Tensor& _linalg_norm_vector_out(Tensor& result, const Tensor& self, optional<Scalar> opt_ord, std::vector<int64_t> dim, bool keepdim, optional<ScalarType> opt_dtype) {
   Tensor result_;
   bool case_was_overridden = false;
+
+  auto t1 = std::chrono::high_resolution_clock::now();
+
   if (opt_ord.has_value()) {
     TORCH_INTERNAL_ASSERT(dim.size() == 1);
     auto ord = opt_ord.value().toDouble();
@@ -1801,21 +1809,38 @@ static Tensor& _linalg_norm_vector_out(Tensor& result, const Tensor& self, optio
     bool unique_dims = (std::unique(dim_.begin(), dim_.end())) == dim_.end();
     TORCH_CHECK(unique_dims, "Expected dims to be different, got this instead: (", dim, ")");
   }
+
+  auto t2 = std::chrono::high_resolution_clock::now();
+
   if (!case_was_overridden) {
     if (opt_dtype.has_value()) {
+      std::cout<<1<<std::endl;
       result_ = at::norm(self.to(opt_dtype.value()), opt_ord, dim, keepdim);
     } else {
+      std::cout<<2<<std::endl;
       result_ = at::norm(self, opt_ord, dim, keepdim);
     }
   }
+
+  auto t3 = std::chrono::high_resolution_clock::now();
+
   resize_output(result, result_.sizes());
   result.copy_(result_);
+
+  auto t4 = std::chrono::high_resolution_clock::now();
+
+
+  std::cout<<"_linalg_norm_vector_out timings (micros):"<< std::chrono::duration_cast<std::chrono::microseconds>(t2-t1).count() << std::endl;
+  std::cout<<"_linalg_norm_vector_out timings (micros):"<< std::chrono::duration_cast<std::chrono::microseconds>(t3-t2).count() << std::endl;
+  std::cout<<"_linalg_norm_vector_out timings (micros):"<< std::chrono::duration_cast<std::chrono::microseconds>(t4-t3).count() << std::endl;
+
   return result;
 }
 
 static Tensor& linalg_norm_out_impl(Tensor& result, const Tensor& self, optional<Scalar> opt_num_ord, optional<std::string> opt_str_ord, optional<IntArrayRef> opt_dim, bool keepdim, optional<ScalarType> opt_dtype) {
   // Callers must give the ord argument as either a number, a string, or neither.
   // Since the user-facing API has no direct control over how this function is called, this is an internal assert.
+  
   TORCH_INTERNAL_ASSERT(!(opt_num_ord.has_value() && opt_str_ord.has_value()));
   if (opt_dtype.has_value()) {
     auto dtype = opt_dtype.value();
@@ -1841,8 +1866,10 @@ static Tensor& linalg_norm_out_impl(Tensor& result, const Tensor& self, optional
     // 'ord' is int or None
     std::vector<int64_t> dim_ = opt_dim.has_value() ? opt_dim.value().vec() : make_dim_list(ndim);
     if (!opt_num_ord.has_value() || dim_.size() == 1) {
+        std::cout<<"linalgnorm_vec"<<std::endl;
       _linalg_norm_vector_out(result, self, opt_num_ord, dim_, keepdim, opt_dtype);
     } else if (dim_.size() == 2) {
+        std::cout<<"linalgnorm_mat"<<std::endl;
       _linalg_norm_matrix_out(result, self, opt_num_ord.value(), dim_, keepdim, opt_dtype);
     } else {
       TORCH_CHECK(false, "'dim' must specify 1 or 2 dimensions when order is numerical and input is "

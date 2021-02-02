@@ -5,6 +5,7 @@
 #include <ATen/Functions.h>
 #include <ATen/TensorOperators.h>
 
+#include <iostream>
 /// Contains the implementation of parallel reductions in TensorIterator.
 
 namespace at {
@@ -127,6 +128,7 @@ void TensorIteratorBase::foreach_reduced_elt(loop_subiter_t loop, bool paralleli
     return;
   }
   if (output(0).numel() == 1) {
+    std::cout<<"loop in one go!"<<std::endl;
     loop(*this);
   }
   else if (numel() < at::internal::GRAIN_SIZE || at::get_num_threads() == 1 ||
@@ -140,12 +142,16 @@ void TensorIteratorBase::foreach_reduced_elt(loop_subiter_t loop, bool paralleli
       non_reduced_numel *= non_reduced_shape[i];
     }
     DimCounter dims {non_reduced_shape, {0, non_reduced_numel}};
+    int loop_counter = 0;
     while (!dims.is_done()) {
       TensorIterator reduced = *this;
       reduced.select_all_keeping_dim(reduce_dims, dims.values);
       loop(reduced);
       dims.increment({1, 1});
+      // std::cout<<"!dims.is_done() loop"<<std::endl;
+      loop_counter += 1;
     }
+    std::cout<< "loop_counter:"<<loop_counter <<std::endl;
   }
   else {
     int dim = find_split_dim(*this);

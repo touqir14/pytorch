@@ -6,6 +6,8 @@
 
 #include <sstream>
 
+#include <iostream>
+
 namespace at { namespace native { namespace {
 
 using namespace vec256;
@@ -179,6 +181,7 @@ struct all_same : guts::conjunction<
 
 template <typename ops_t, typename init_t>
 void binary_kernel_reduce(TensorIteratorBase& iter, ops_t ops, init_t init) {
+  std::cout<<"binary_kernel_reduce"<<std::endl;
   using rf_t = decltype(&ops_t::reduce);
   using cf_t = decltype(&ops_t::combine);
   using pf_t = decltype(&ops_t::project);
@@ -220,6 +223,8 @@ void binary_kernel_reduce(TensorIteratorBase& iter, ops_t ops, init_t init) {
     auto numel = sub_iter.numel();
     if (numel < at::internal::GRAIN_SIZE || at::get_num_threads() == 1 ||
         at::in_parallel_region()) {
+    // if (numel < at::internal::GRAIN_SIZE || at::get_num_threads() == 1 ||
+    //     at::in_parallel_region() || true) {
       total_acc = reduction_body(total_acc, 0, numel);
     } else {
       int max_threads = at::get_num_threads();
@@ -241,6 +246,7 @@ void binary_kernel_reduce(TensorIteratorBase& iter, ops_t ops, init_t init) {
     }
     set_results<r_traits>(ops.project(total_acc), sub_iter, num_outputs);
   });
+  // }, false);
 }
 
 template <typename func_t, typename vec_func_t>
