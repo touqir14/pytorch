@@ -1517,3 +1517,25 @@ class TestFrozenOptimizations(JitTestCase):
         # optimize_frozen_module should be run
         frozen_mod = torch.jit.freeze(torch.jit.script(mod.eval()))
         FileCheck().check_not("batch_norm").run(frozen_mod.graph)
+
+    def test_freeze_remove_dropout(self):
+        class Net(nn.Module):
+            def __init__(self):
+                super(Net, self).__init__()
+                self.dropout = nn.Dropout(0.5)
+
+            def forward(self, x):
+                return self.dropout(x)
+
+        mod = torch.jit.script(Net())
+        script_mod = torch.jit.script(mod)
+        script_mod.eval()
+ 
+        # By default freezing runs optimize_frozen_module
+        frozen_mod = torch.jit.freeze(torch.jit.script(mod.eval()))
+        FileCheck().check_not("aten::dropout").run(frozen_mod.graph)
+
+        input = torch.randn(2)
+        output_s = script_mod.forward(input)
+        output_f = frozen_mod.forward(input)
+        self.assertEqual(output_s, output_f)
