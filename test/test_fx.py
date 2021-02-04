@@ -1597,6 +1597,31 @@ class TestFX(JitTestCase):
         with self.assertRaisesRegex(NotImplementedError, "new_args"):
             x[0] = 4
 
+    def test_error_reporting_after_recompile(self):
+        class M(torch.nn.Module):
+            def __init__(self):
+                super(M, self).__init__()
+                self.W = torch.nn.Parameter(torch.randn(5))
+
+            def forward(self, x):
+                return torch.dot(self.W, x)
+
+        traced = torch.fx.symbolic_trace(M())
+
+        out_nodes = [n for n in traced.graph.nodes if n.op == "output"]
+        out = out_nodes[-1]
+        relu_out = traced.graph.call_method(method_name='relu', args=(out,))
+        out.replace_all_uses_with(relu_out)
+
+        traced.recompile()
+
+        with self.capture_stderr() as captured:
+            with self.assertRaises(TypeError):
+                traced(5)
+
+        self.assertIn("Call using an FX-traced Module, line 4 of the "
+                      "traced Module’s generated forward function:",
+                      captured[0])
 
 def run_getitem_target():
     from torch.fx.symbolic_trace import _wrapped_methods_to_patch
