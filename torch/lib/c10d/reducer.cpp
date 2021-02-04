@@ -44,7 +44,8 @@ Reducer::Reducer(
       find_unused_parameters_(find_unused_parameters),
       gradient_as_bucket_view_(gradient_as_bucket_view),
       local_used_maps_reduced_(false),
-      backward_stats_base_(0),
+      num_iterations_(0),
+      num_buckets_ready_(0),
       has_rebuilt_bucket_(false),
       bucket_bytes_cap_(bucket_bytes_cap),
       divFactor_(kUnsetDivFactor),
@@ -184,6 +185,15 @@ Reducer::Reducer(
             at::empty({static_cast<long>(variable_count)}, options);
       }
     }
+  }
+
+  if (replicas_[0][0].is_cuda()) {
+    cudaEventCreate(&gpu_timer_.forward_start);
+    cudaEventCreate(&gpu_timer_.backward_compute_start);
+    cudaEventCreate(&gpu_timer_.backward_compute_end);
+    cudaEventCreate(&gpu_timer_.backward_comm_start);
+    cudaEventCreate(&gpu_timer_.backward_comm_end);
+    cudaEventCreate(&gpu_timer_.backward_variable_ready);
   }
 }
 
@@ -565,8 +575,20 @@ void Reducer::mark_variable_ready(VariableIndex index) {
   TORCH_CHECK(
       variable_index < variable_locators_.size(),
       "Out of range variable index.");
-  backward_stats_[replica_index][variable_index] =
-      current_time_in_nanos() - backward_stats_base_;
+  if (replicas_[0][0].is_cuda()) {
+    cudaEventRecord(gpu_timer_.backward_variable_ready);
+    cudaEventSynchronize(gpu_timer_.backward_variable_ready);
+    float ready_time_ms = 0.0;
+    cudaEventElapsedTime(
+      &ready_time_ms,
+      gpu_timer_.backward_compute_start,
+      gpu_timer_.backward_variable_ready);
+    backward_stats_[replica_index][variable_index]
+      = int(ready_time_ms * 1000000);
+  } else {
+    backward_stats_[replica_index][variable_index] =
+      current_time_in_nanos() - cpu_timer_.backward_compute_start_time;
+  }
 
   // Any time we mark a variable ready (be it in line due to unused parameters,
   // or via an autograd hook), we require a call to the finalize function. If
@@ -691,6 +713,14 @@ void Reducer::mark_bucket_ready(size_t bucket_index) {
   // - found a bucket that's not yet ready for reduction.
   for (; next_bucket_ < buckets_.size() && buckets_[next_bucket_].pending == 0;
        next_bucket_++) {
+    num_buckets_ready_++;
+    if (num_buckets_ready_ == 1) {
+      if (replicas_[0][0].is_cuda()) {
+        cudaEventRecord(gpu_timer_.backward_comm_start);
+      } else {
+        cpu_timer_.backward_comm_start_time = current_time_in_nanos();
+      }
+    }
     auto& bucket = buckets_[next_bucket_];
     std::vector<at::Tensor> tensors;
     tensors.reserve(bucket.replicas.size());
@@ -969,6 +999,16 @@ void Reducer::populate_bucket_views_out(
   }
 }
 
+void Reducer::prepare_for_forward() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  num_iterations_++;
+  if (replicas_[0][0].is_cuda()) {
+    cudaEventRecord(gpu_timer_.forward_start);
+  } else {
+    cpu_timer_.forward_start_time = current_time_in_nanos();
+  }
+}
+
 // Traverse the autograd graph starting at the specified output.
 // All parameters for which we have a pointer to their gradient accumulation
 // functions, but don't show up in the autograd graph will be marked ready for
@@ -984,7 +1024,17 @@ void Reducer::prepare_for_backward(
   // Reset accounting.
   expect_autograd_hooks_ = true;
   next_bucket_ = 0;
-  backward_stats_base_ = current_time_in_nanos();
+
+  if (replicas_[0][0].is_cuda()) {
+    cudaEventRecord(gpu_timer_.backward_compute_start);
+  } else {
+    cpu_timer_.backward_compute_start_time = current_time_in_nanos();
+  }
+
+  // Reset num_buckets_ready_ at the beginning of backward computation
+  // in each iteration.
+  num_buckets_ready_ = 0;
+
   for (auto& bucket : buckets_) {
     for (auto& replica : bucket.replicas) {
       replica.pending = replica.variables.size();
@@ -1177,6 +1227,12 @@ void Reducer::finalize_bucket_dense(Bucket& bucket) {
 }
 
 void Reducer::finalize_backward() {
+  if (replicas_[0][0].is_cuda()) {
+    cudaEventRecord(gpu_timer_.backward_compute_end);
+  } else {
+    cpu_timer_.backward_compute_end_time = current_time_in_nanos();
+  }
+
   // No longer expect autograd hooks to fire after this function returns.
   TORCH_INTERNAL_ASSERT(expect_autograd_hooks_);
   expect_autograd_hooks_ = false;
@@ -1246,6 +1302,12 @@ void Reducer::finalize_backward() {
       local_used_work_->wait();
     }
     local_used_maps_reduced_ = false;
+  }
+
+  if (replicas_[0][0].is_cuda()) {
+    cudaEventRecord(gpu_timer_.backward_comm_end);
+  } else {
+    cpu_timer_.backward_comm_end_time = current_time_in_nanos();
   }
 }
 

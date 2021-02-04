@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cuda_runtime.h>
 #include <memory>
 #include <mutex>
 #include <tuple>
@@ -49,6 +50,10 @@ class Reducer {
   // a call to this function can simply be omitted.
   void prepare_for_backward(
       const std::vector<torch::autograd::Variable>& outputs);
+
+  // Called at the begginning of forward() inside DistributedDataParallel,
+  // right now it caputures the starting time of forward in each iteration.
+  void prepare_for_forward();
 
   // Returns the relative time in nanoseconds when gradients were ready,
   // with respect to the time `prepare_for_backward` was called. The outer
@@ -316,10 +321,42 @@ class Reducer {
   // Map the index of a variable to its location in the bucket structure.
   std::vector<VariableLocator> variable_locators_;
 
+  // track the number of iterations trained by users
+  long num_iterations_;
+  // track the number of buckets that have been ready for
+  // communication calls like allReduce or communication hooks.
+  int num_buckets_ready_;
+
+  // CPU timestamp to record event start and end time.
+  struct CPUTimer {
+    // The timestamp of forward call start time in each iteration.
+    int64_t forward_start_time;
+    // The timestamp of backward computation start and end time in each iteration.
+    int64_t backward_compute_start_time;
+    int64_t backward_compute_end_time;
+    // The timestamp of first communication call start time in each iteration.
+    int64_t backward_comm_start_time;
+    // The timestamp of last communication call end time in each iteration.
+    int64_t backward_comm_end_time;
+  };
+
+  // GPU events to record event start and end time.
+  struct GPUTimer {
+    cudaEvent_t forward_start;
+    cudaEvent_t backward_compute_start;
+    cudaEvent_t backward_compute_end;
+    cudaEvent_t backward_comm_start;
+    cudaEvent_t backward_comm_end;
+    // It is used to calculate backward_stats_
+    // when training runs on GPUs.
+    cudaEvent_t backward_variable_ready;
+  };
+
+  CPUTimer cpu_timer_{};
+  GPUTimer gpu_timer_{};
   // We collect the relative timestamp of every gradient being ready
   // when executing autograd. This can be used to derive a timeline of
   // the point in time buckets were ready, or ideal bucket assignment/ordering.
-  int64_t backward_stats_base_;
   std::vector<std::vector<int64_t>> backward_stats_;
 
   // Following variables are to help build dynamic bucket order
